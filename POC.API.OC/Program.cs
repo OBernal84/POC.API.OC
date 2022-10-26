@@ -1,11 +1,8 @@
-﻿using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
+﻿using Newtonsoft.Json.Linq;
 using System;
-using System.Collections;
 using System.Collections.Generic;
 using System.Data;
 using System.Data.SqlClient;
-using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -25,7 +22,7 @@ namespace POC.API.OC
             
             StoreData(JObject.Parse(jsonText));
 
-            GetData();
+            //GetData();
 
         }
 
@@ -71,7 +68,7 @@ namespace POC.API.OC
             Console.WriteLine("Saving JSON into database...");
 
             //Database connection, quick and dirty way
-            const string connectionString = @"Data Source=SERVER;Initial Catalog=Test;User ID=sa;Password=test";
+            const string connectionString = @"Data Source=azsqldev1;Initial Catalog=PurchasingTest;Integrated Security = True;Application Name=Construction.UI;";
             var cnn = new SqlConnection(connectionString);
             cnn.Open();
 
@@ -96,18 +93,19 @@ namespace POC.API.OC
             {
                 //Gets arrays from product node
 
+                var productId = Guid.NewGuid();
                 var productName = ((JProperty)product).Name;
                 var searcheables = product.SelectToken("$..Searchable").Select(s => s).ToArray();
                 var brandImageNames = product.SelectToken("$..['Brand.ImageName']").Select(s => s).ToArray();
                 var upcs = product.SelectToken("$..UPC").Select(s => s).ToArray();
                 var benefitCopies = product.SelectToken("$...BenefitCopy").Select(s => s).ToArray();
                 var attributes = product.SelectToken("$....Attributes").Select(s => s).ToArray();
-                var images = product.SelectTokens("$.....Images");
+                var images = product.SelectTokens("$.....Images").Select(s => s).ToArray();
                 var documents = product.SelectTokens("$......Documents").Select(s => s).ToArray();
                 var services = product.SelectTokens("$.......Services").Select(s => s).ToArray();
                 var relationships = product.SelectTokens("$........Relationships").Select(s => s).ToArray();
                 var binaryObjectDetails = product.SelectTokens("$.........BinaryObjectDetails").Select(s => s).ToArray();
-                var featuredParts = product.SelectTokens("$..........FeaturedPart");
+                var featuredParts = product.SelectTokens("$..........FeaturedPart").Select(s => s).ToArray();
 
                 ////////////////////////////////////////////////////////////////////
                 //Here we finish playing with the JSON file using Json Path
@@ -124,39 +122,16 @@ namespace POC.API.OC
                 var upcString = string.Empty;
                 foreach (var upc in upcs) upcString += upc;
 
-                var benefitCopyString = string.Empty;
-                foreach (var benefitCopy in benefitCopies) benefitCopyString += benefitCopy;
 
-                var attributeString = string.Empty;
-                foreach (var attribute in attributes) attributeString += attribute;
+                //Executing an insert per product
 
-                var imageString = string.Empty;
-                foreach (var image in images) imageString += image;
-
-                var documentString = string.Empty;
-                foreach (var document in documents) documentString += document;
-
-                var serviceString = string.Empty;
-                foreach (var service in services) serviceString += service;
-
-                var relationshipString = string.Empty;
-                foreach (var relationship in relationships) relationshipString += relationship;
-
-                var binaryObjectDetailsString = string.Empty;
-                foreach (var binaryObjectDetail in binaryObjectDetails) binaryObjectDetailsString += binaryObjectDetail;
-
-                var featuredPartString = string.Empty;
-                foreach (var featuredPart in featuredParts) featuredPartString += featuredPart;
-
-
-                //Finally executing an insert per product
-
-                const string query = "INSERT INTO Results " +
-                                     "(totalNumRecs, firstRecNum, lastRecNum, sortOptions, productName, searcheables, brandImageName, upcs, benefitCopies, attributes, images, documents, services, relationships, binaryObjectDetails, featuredParts) " +
+                const string query = "INSERT INTO result_products " +
+                                     "(id, totalNumRecs, firstRecNum, lastRecNum, sortOptions, productName, searcheables, brandImageName, upcs) " +
                                      "VALUES " +
-                                     "(@totalNumRecs, @firstRecNum, @lastRecNum, @sortOptions, @productName, @searcheables, @brandImageName, @upcs, @benefitCopies, @attributes, @images, @documents, @services, @relationships, @binaryObjectDetails, @featuredParts) ";
+                                     "(@id, @totalNumRecs, @firstRecNum, @lastRecNum, @sortOptions, @productName, @searcheables, @brandImageName, @upcs) ";
 
                 var command = new SqlCommand(query, cnn);
+                command.Parameters.AddWithValue("@id", productId);
                 command.Parameters.AddWithValue("@totalNumRecs", totalNumRecs);
                 command.Parameters.AddWithValue("@firstRecNum", firstRecNum);
                 command.Parameters.AddWithValue("@lastRecNum", lastRecNum);
@@ -165,19 +140,238 @@ namespace POC.API.OC
                 command.Parameters.AddWithValue("@searcheables", searchableString);
                 command.Parameters.AddWithValue("@brandImageName", brandImageNameString);
                 command.Parameters.AddWithValue("@upcs", upcString);
-                command.Parameters.AddWithValue("@benefitCopies", benefitCopyString);
-                command.Parameters.AddWithValue("@attributes", attributeString);
-                command.Parameters.AddWithValue("@images", imageString);
-                command.Parameters.AddWithValue("@documents", documentString);
-                command.Parameters.AddWithValue("@services", serviceString);
-                command.Parameters.AddWithValue("@relationships", relationshipString);
-                command.Parameters.AddWithValue("@binaryObjectDetails", binaryObjectDetailsString);
-                command.Parameters.AddWithValue("@featuredParts", featuredPartString);
 
                 command.ExecuteNonQuery();
+
+                StoreBenefitCopies(cnn, benefitCopies, productId);
+
+                StoreAttributes(cnn, attributes, productId);
+
+                StoreImages(cnn, images, productId);
+
+                StoreDocuments(cnn, documents, productId);
+
+                StoreServices(cnn, services, productId);
+
+                StoreRelationships(cnn, relationships, productId);
+
+                StoreBinaryObjectDetails(cnn, binaryObjectDetails, productId);
+
+                StoreFeaturedParts(cnn, featuredParts, productId);
             }
 
             cnn.Close();
+        }
+
+        private static void StoreBenefitCopies(SqlConnection cnn, JToken[] benefitCopies, Guid productId)
+        {
+            foreach (var benefitCopy in benefitCopies)
+            {
+                var tempObjects = benefitCopy.SelectToken("$");
+                var id = Guid.NewGuid();
+                var info = string.Empty;
+
+                foreach (var tempObject in tempObjects) info += tempObject.SelectToken("$");
+
+                const string query2 = "INSERT INTO result_benefitCopies " +
+                                      "(id, product_id, info) " +
+                                      "VALUES " +
+                                      "(@id, @product_id, @info) ";
+
+                var command = new SqlCommand(query2, cnn);
+                command.Parameters.AddWithValue("@id", id);
+                command.Parameters.AddWithValue("@product_id", productId);
+                command.Parameters.AddWithValue("@info", info);
+
+                command.ExecuteNonQuery();
+            }
+        }
+
+        private static void StoreAttributes(SqlConnection cnn, JToken[] attributes, Guid productId)
+        {
+            var info = string.Empty;
+            foreach (var attribute in attributes)
+            {
+                info += attribute.SelectToken("$");
+                var id = Guid.NewGuid();
+
+                const string query2 = "INSERT INTO result_attributes " +
+                                      "(id, product_id, info) " +
+                                      "VALUES " +
+                                      "(@id, @product_id, @info) ";
+
+                var command = new SqlCommand(query2, cnn);
+                command.Parameters.AddWithValue("@id", id);
+                command.Parameters.AddWithValue("@product_id", productId);
+                command.Parameters.AddWithValue("@info", info);
+
+                command.ExecuteNonQuery();
+            }
+        }
+
+        private static void StoreImages(SqlConnection cnn, IEnumerable<JToken> images, Guid productId)
+        {
+            foreach (var image in images)
+            {
+                var tempObjects = image.SelectToken("$");
+                var id = Guid.NewGuid();
+
+                if (tempObjects != null && tempObjects.HasValues)
+                {
+                    foreach (var tempObject in tempObjects)
+                    {
+                        if (tempObject != null)
+                        {
+                            var info = tempObject.SelectToken("$").ToString();
+                            const string query = "INSERT INTO result_images " +
+                                                 "(id, product_id, info) " +
+                                                 "VALUES " +
+                                                 "(@id, @product_id, @info) ";
+
+                            var command = new SqlCommand(query, cnn);
+                            command.Parameters.AddWithValue("@id", id);
+                            command.Parameters.AddWithValue("@product_id", productId);
+                            command.Parameters.AddWithValue("@info", info);
+
+                            command.ExecuteNonQuery();
+                        }
+                    }
+                }
+            }
+        }
+
+        private static void StoreDocuments(SqlConnection cnn, JToken[] documents, Guid productId)
+        {
+            foreach (var document in documents)
+            {
+                var tempObjects = document.SelectToken("$");
+                var id = Guid.NewGuid();
+                foreach (var tempObject in tempObjects)
+                {
+                    var info = tempObject.SelectToken("$").ToString();
+                    const string query2 = "INSERT INTO result_documents " +
+                                          "(id, product_id, info) " +
+                                          "VALUES " +
+                                          "(@id, @product_id, @info) ";
+
+                    var command = new SqlCommand(query2, cnn);
+                    command.Parameters.AddWithValue("@id", id);
+                    command.Parameters.AddWithValue("@product_id", productId);
+                    command.Parameters.AddWithValue("@info", info);
+
+                    command.ExecuteNonQuery();
+                }
+
+
+            }
+        }
+
+        private static void StoreServices(SqlConnection cnn, JToken[] services, Guid productId)
+        {
+            foreach (var service in services)
+            {
+                var tempObjects = service.SelectToken("$");
+                var id = Guid.NewGuid();
+                var info = string.Empty;
+
+                foreach (var tempObject in tempObjects) info += tempObject.SelectToken("$");
+
+                if (!string.IsNullOrEmpty(info))
+                {
+                    const string query2 = "INSERT INTO result_services " +
+                                          "(id, product_id, info) " +
+                                          "VALUES " +
+                                          "(@id, @product_id, @info) ";
+
+                    var command = new SqlCommand(query2, cnn);
+                    command.Parameters.AddWithValue("@id", id);
+                    command.Parameters.AddWithValue("@product_id", productId);
+                    command.Parameters.AddWithValue("@info", info);
+
+                    command.ExecuteNonQuery();
+                }
+            }
+        }
+
+        private static void StoreRelationships(SqlConnection cnn, JToken[] relationShips, Guid productId)
+        {
+            foreach (var relationShip in relationShips)
+            {
+                var tempObjects = relationShip.SelectToken("$");
+                var id = Guid.NewGuid();
+                var info = string.Empty;
+
+                foreach (var tempObject in tempObjects) info += tempObject.SelectToken("$");
+
+                if (!string.IsNullOrEmpty(info))
+                {
+                    const string query2 = "INSERT INTO result_relationShips " +
+                                          "(id, product_id, info) " +
+                                          "VALUES " +
+                                          "(@id, @product_id, @info) ";
+
+                    var command = new SqlCommand(query2, cnn);
+                    command.Parameters.AddWithValue("@id", id);
+                    command.Parameters.AddWithValue("@product_id", productId);
+                    command.Parameters.AddWithValue("@info", info);
+
+                    command.ExecuteNonQuery();
+                }
+            }
+        }
+
+        private static void StoreBinaryObjectDetails(SqlConnection cnn, JToken[] binaryObjectDetails, Guid productId)
+        {
+            foreach (var binaryObjectDetail in binaryObjectDetails)
+            {
+                var tempObjects = binaryObjectDetail.SelectToken("$");
+                var id = Guid.NewGuid();
+                var info = string.Empty;
+
+                foreach (var tempObject in tempObjects) info += tempObject.SelectToken("$");
+
+                if (!string.IsNullOrEmpty(info))
+                {
+                    const string query2 = "INSERT INTO result_binaryObjectDetails " +
+                                          "(id, product_id, info) " +
+                                          "VALUES " +
+                                          "(@id, @product_id, @info) ";
+
+                    var command = new SqlCommand(query2, cnn);
+                    command.Parameters.AddWithValue("@id", id);
+                    command.Parameters.AddWithValue("@product_id", productId);
+                    command.Parameters.AddWithValue("@info", info);
+
+                    command.ExecuteNonQuery();
+                }
+            }
+        }
+
+        private static void StoreFeaturedParts(SqlConnection cnn, JToken[] featuredParts, Guid productId)
+        {
+            foreach (var featuredPart in featuredParts)
+            {
+                var tempObjects = featuredPart.SelectToken("$");
+                var id = Guid.NewGuid();
+                var info = string.Empty;
+
+                foreach (var tempObject in tempObjects) info += tempObject.SelectToken("$");
+
+                if (!string.IsNullOrEmpty(info))
+                {
+                    const string query2 = "INSERT INTO result_featuredParts " +
+                                          "(id, product_id, info) " +
+                                          "VALUES " +
+                                          "(@id, @product_id, @info) ";
+
+                    var command = new SqlCommand(query2, cnn);
+                    command.Parameters.AddWithValue("@id", id);
+                    command.Parameters.AddWithValue("@product_id", productId);
+                    command.Parameters.AddWithValue("@info", info);
+
+                    command.ExecuteNonQuery();
+                }
+            }
         }
 
         private static void GetData()
@@ -186,7 +380,7 @@ namespace POC.API.OC
             Console.WriteLine("");
             Console.WriteLine("Reading JSON from database...");
 
-            const string connectionString = @"Data Source=SERVER;Initial Catalog=Test;User ID=sa;Password=test";
+            const string connectionString = @"Data Source=azsqldev1;Initial Catalog=PurchasingTest;Integrated Security = True;Application Name=Construction.UI;";
             var cnn = new SqlConnection(connectionString);
             cnn.Open();
 
